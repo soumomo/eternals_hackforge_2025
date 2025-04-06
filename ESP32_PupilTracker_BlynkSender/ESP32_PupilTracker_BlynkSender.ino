@@ -21,8 +21,8 @@
 #include "camera_pins.h"
 
 // --- WiFi Credentials ---
-char ssid[] = "Galaxy A15 5G 17F7";
-char pass[] = "pratyush.das123";
+char ssid[] = "NARZO 70 Pro 5G";
+char pass[] = "k3g6cju2";
 
 // --- Serial Communication with Arduino Uno ---
 HardwareSerial& SerialUno = Serial2; // RX=16, TX=17 - VERIFY PINS!
