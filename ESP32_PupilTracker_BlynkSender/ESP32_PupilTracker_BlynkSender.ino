@@ -1,22 +1,20 @@
 //********************************************************************
 // ESP32 Code for Vision Controlled Spelling Board (GitHub Repo - Plan A Concept)
-// Target: ESP32-CAM (AI Thinker Model) - CORRECTED VERSION - NO LEFT/RIGHT
-// Function: Initializes camera, connects to WiFi/Blynk, SIMULATES pupil
-//           tracking (UP/DOWN/BLINK/CENTER only), prints state to Serial Monitor,
-//           sends servo commands to Arduino Uno via Serial2, and sends
-//           resulting text to Blynk app. Listens for Mode (V0) and Reset (V2).
+// Target: ESP32-CAM (AI Thinker Model) - FINAL GITHUB v3 - NO L/R/CENTER
+// Function: Simulates pupil tracking (UP/DOWN/SELECT only), handles Blynk input
+//           (V0 Mode, V2 Reset), prints state to Serial Monitor, sends servo commands
+//           to Arduino Uno via Serial2, and sends resulting text to Blynk V1.
 //********************************************************************
 
-#define BLYNK_PRINT Serial // Route Blynk library debug output to USB Serial
-// --- Blynk Credentials ---
+#define BLYNK_PRINT Serial
 #define BLYNK_TEMPLATE_ID "TMPL32qEpHOv9"
 #define BLYNK_TEMPLATE_NAME "eternals"
-#define BLYNK_AUTH_TOKEN "Yor3a0ah-mwmKj2maXXnplOP3fQOMgC3"
+#define BLYNK_AUTH_TOKEN "Yor3a0ah-mwmKj2maXXnplOP3fQOMgC3" // Use your valid token
 
-#include "esp_camera.h"       // Camera library
-#include <WiFi.h>             // WiFi library
-#include <WiFiClient.h>       // WiFi client library
-#include <BlynkSimpleEsp32.h> // Blynk library
+#include "esp_camera.h"
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <BlynkSimpleEsp32.h>
 
 // --- Camera Model ---
 #define CAMERA_MODEL_AI_THINKER
@@ -27,44 +25,40 @@ char ssid[] = "Galaxy A15 5G 17F7";
 char pass[] = "pratyush.das123";
 
 // --- Serial Communication with Arduino Uno ---
-// Using Serial2 (GPIO17=TX2, GPIO16=RX2) - VERIFY THESE PINS ARE FREE!
-HardwareSerial& SerialUno = Serial2;
+HardwareSerial& SerialUno = Serial2; // RX=16, TX=17 - VERIFY PINS!
 const long UNO_BAUD_RATE = 9600;
 
 // --- Blynk Objects & Timers ---
 BlynkTimer timer;
-const int BLYNK_MODE_TOGGLE_PIN = V0; // Virtual pin for Mode toggle button
-const int BLYNK_TEXT_OUTPUT_PIN = V1; // Virtual pin for displaying text in Blynk
-const int BLYNK_RESET_PIN = V2;       // Virtual pin for Reset button
+const int BLYNK_MODE_TOGGLE_PIN = V0;
+const int BLYNK_TEXT_OUTPUT_PIN = V1;
+const int BLYNK_RESET_PIN = V2;
 
 // --- State & Simulation Variables ---
-bool textModeActive = false; // Controlled by Blynk V0
-int sim_state_counter = 0;
-unsigned long lastSimTime = 0;
-const unsigned long SIM_INTERVAL = 3000; // Simulate a command every 3 seconds
-// Note: Simplified states - removed LEFT/RIGHT
-enum SimState { STATE_CENTER, STATE_UP, STATE_DOWN, STATE_SELECT, STATE_RESET };
-SimState currentSimulatedStateEnum = STATE_CENTER;
-String currentSimulatedStateString = "CENTER"; // For sending/displaying
+bool systemActive = false;
+// Simplified states - removed CENTER, LEFT, RIGHT
+enum SimGazeState { STATE_UP, STATE_DOWN, STATE_SELECT, STATE_RESET, STATE_INIT };
+SimGazeState currentSimState = STATE_INIT;
+unsigned long lastSimActionTime = 0;
+const unsigned long SIM_ACTION_INTERVAL = 3500;
+String currentLetterContext = " "; // What letter context corresponds to UP or DOWN state
 
 //====================================================================
 // SETUP
 //====================================================================
 void setup() {
-  Serial.begin(115200); // USB Serial for Debugging
+  Serial.begin(115200);
   Serial.setDebugOutput(true);
-  Serial.println("\n\nESP32 Pupil Tracker Simulation (Plan A - No Left/Right)");
-  Serial.println("------------------------------------------------------");
-  Serial.print("Blynk Template: "); Serial.print(BLYNK_TEMPLATE_NAME);
-  Serial.print(" / ID: "); Serial.println(BLYNK_TEMPLATE_ID);
+  Serial.println("\n\nESP32 Plan A Sim - No L/R/Center");
+  Serial.println("---------------------------------");
+  Serial.print("Blynk Template: "); Serial.print(BLYNK_TEMPLATE_NAME); Serial.print(" / ID: "); Serial.println(BLYNK_TEMPLATE_ID);
 
-  // --- Initialize Serial for Uno Communication ---
-  SerialUno.begin(UNO_BAUD_RATE, SERIAL_8N1, 16, 17); // RX=16, TX=17 for Serial2
-  Serial.println("Serial2 for Uno communication started (TX=17, RX=16).");
+  SerialUno.begin(UNO_BAUD_RATE, SERIAL_8N1, 16, 17);
+  Serial.println("Serial2 for Uno started (TX=17, RX=16). Baud: " + String(UNO_BAUD_RATE));
 
-  // --- Initialize Camera --- (Conceptual)
+  // --- Conceptual Camera Initialization ---
   camera_config_t config;
-  // (Full camera config struct population - same as previous version)
+  // (Populate config struct - same as previous: GRAYSCALE, QQVGA etc)
   config.ledc_channel = LEDC_CHANNEL_0; config.ledc_timer = LEDC_TIMER_0;
   config.pin_d0 = Y2_GPIO_NUM; config.pin_d1 = Y3_GPIO_NUM; config.pin_d2 = Y4_GPIO_NUM;
   config.pin_d3 = Y5_GPIO_NUM; config.pin_d4 = Y6_GPIO_NUM; config.pin_d5 = Y7_GPIO_NUM;
@@ -78,11 +72,8 @@ void setup() {
   config.frame_size = FRAMESIZE_QQVGA; config.fb_count = 1;
 
   esp_err_t err = esp_camera_init(&config);
-  if (err != ESP_OK) {
-    Serial.printf("!!! Conceptual Camera init failed: 0x%x (Ignoring for simulation) !!!\n", err);
-  } else {
-    Serial.println("Conceptual Camera Initialized Successfully");
-  }
+  if (err == ESP_OK) { Serial.println("Conceptual Camera Initialized"); }
+  else { Serial.printf("!!! Conceptual Camera init failed: 0x%x !!!\n", err); }
 
   // --- Connect to WiFi & Blynk ---
   Serial.printf("Connecting to WiFi: %s ", ssid);
@@ -93,7 +84,7 @@ void setup() {
   if(Blynk.connected()){ Serial.println(" Connected!"); }
   else { Serial.println(" FAILED or timed out!"); }
 
-  Serial.println("Setup Complete. Waiting for Blynk commands / Running Simulation.");
+  Serial.println("Setup Complete. Waiting for Blynk V0 activation...");
 } // End of setup()
 
 
@@ -101,28 +92,31 @@ void setup() {
 BLYNK_WRITE(V0) { // Mode Toggle
   int value = param.asInt();
   if (value == 1) {
-    textModeActive = true;
-    Serial.println("Received Text Mode ON from Blynk [V0]");
-    SerialUno.println("MODE_ON"); // Tell Uno mode is ON (if needed)
+    systemActive = true;
+    Serial.println("Received Mode ON from Blynk [V0]. Activating simulation.");
+    SerialUno.println("MODE_ON");
+    SerialUno.println("RESET"); // Tell Uno to go to initial position
+    currentSimState = STATE_RESET; // Start simulation at reset state
+    currentLetterContext = " ";
+    if(Blynk.connected()) { Blynk.virtualWrite(BLYNK_TEXT_OUTPUT_PIN, " "); }
   } else {
-    textModeActive = false;
-    Serial.println("Received Text Mode OFF from Blynk [V0]");
-    SerialUno.println("MODE_OFF"); // Tell Uno mode is OFF
+    systemActive = false;
+    Serial.println("Received Mode OFF from Blynk [V0]. Deactivating.");
+    SerialUno.println("MODE_OFF");
   }
 }
 
-BLYNK_WRITE(V2) { // Reset Command
+BLYNK_WRITE(V2) { // Reset Command from Blynk
   int value = param.asInt();
-  if (value == 1) {
+  if (value == 1 && systemActive) {
     Serial.println("Received RESET command from Blynk [V2]");
-    currentSimulatedStateEnum = STATE_RESET; // Set state
-    currentSimulatedStateString = stateToString(currentSimulatedStateEnum);
-    Serial.printf("-> Sending '%s' to Uno...\n", currentSimulatedStateString.c_str());
-    SerialUno.println(currentSimulatedStateString); // Send RESET command to Uno
-    Serial.printf("-> Clearing text on Blynk V%d...\n", BLYNK_TEXT_OUTPUT_PIN);
-    Blynk.virtualWrite(BLYNK_TEXT_OUTPUT_PIN, " "); // Clear Blynk display
-    sim_state_counter = 0; // Reset simulation cycle
-    lastSimTime = millis();
+    Serial.println("-> Sending 'RESET' command to Uno...");
+    SerialUno.println("RESET"); // Send RESET command to Uno
+    Serial.println("-> Clearing text on Blynk V1...");
+    if(Blynk.connected()) { Blynk.virtualWrite(BLYNK_TEXT_OUTPUT_PIN, " "); }
+    currentSimState = STATE_RESET; // Reset internal state
+    currentLetterContext = " ";
+    lastSimActionTime = millis();
   }
 }
 
@@ -133,35 +127,44 @@ void loop() {
   if(Blynk.connected()){ Blynk.run(); }
   timer.run();
 
-  // Only run simulation if text mode is active
-  if (!textModeActive) {
-    yield(); return;
-  }
+  if (!systemActive) { yield(); return; } // Only run simulation if active
 
-  // *** SIMULATED PUPIL TRACKING LOGIC (UP/DOWN/SELECT/CENTER/RESET Only) ***
+  // *** SIMULATED PUPIL TRACKING LOGIC (UP/DOWN/SELECT/RESET Only) ***
   unsigned long currentTime = millis();
-  if (currentTime - lastSimTime > SIM_INTERVAL) {
+  if (currentTime - lastSimActionTime > SIM_ACTION_INTERVAL) {
 
     String commandForUno = "";
     String textForBlynk = "";
 
-    // Simulate cycling through states (excluding Left/Right)
-    sim_state_counter++;
-    if (sim_state_counter > 4) sim_state_counter = 0; // Cycle through 0, 1, 2, 3, 4
-
-    switch (sim_state_counter) {
-      case 0: currentSimulatedStateEnum = STATE_CENTER; textForBlynk = ""; break;    // Center
-      case 1: currentSimulatedStateEnum = STATE_UP; textForBlynk = ""; break;       // Look Up
-      case 2: currentSimulatedStateEnum = STATE_SELECT; textForBlynk = "T"; break;  // Select 'T' (assume Up position)
-      case 3: currentSimulatedStateEnum = STATE_DOWN; textForBlynk = ""; break;     // Look Down
-      case 4: currentSimulatedStateEnum = STATE_SELECT; textForBlynk = "A"; break;  // Select 'A' (assume Down position)
-      // Implicitly loops back to CENTER on next cycle after state 4
-      // RESET state is triggered only by Blynk V2 now
+    // Simulate cycling through states: RESET -> UP -> SELECT -> DOWN -> SELECT -> RESET -> ...
+    SimGazeState nextState;
+    switch(currentSimState) {
+        case STATE_RESET:  nextState = STATE_UP; break;
+        case STATE_UP:     nextState = STATE_SELECT; break;
+        case STATE_DOWN:   nextState = STATE_SELECT; break;
+        case STATE_SELECT: // After selecting, decide where to go next
+                           nextState = (currentLetterContext == "U") ? STATE_DOWN : STATE_RESET; // Go DOWN after UP select, otherwise RESET
+                           break;
+        default:           nextState = STATE_RESET; break; // Default to RESET
     }
-    currentSimulatedStateString = stateToString(currentSimulatedStateEnum);
-    commandForUno = currentSimulatedStateString; // Command for Uno is the state name
+    currentSimState = nextState; // Update state for this cycle
 
-    // --- Print Simulated State to Serial Monitor ---
+    // Determine commands and text based on the *new* state
+    switch (currentSimState) {
+      case STATE_UP:     commandForUno = "UP"; textForBlynk = ""; currentLetterContext = "U"; break; // Context is 'U'
+      case STATE_DOWN:   commandForUno = "DOWN"; textForBlynk = ""; currentLetterContext = "D"; break; // Context is 'D'
+      case STATE_SELECT: // Select is triggered (simulated blink)
+          commandForUno = "SELECT"; // Tell Uno to wiggle or indicate selection visually
+          textForBlynk = currentLetterContext; // Send the letter from the previous context (U or D)
+          break;
+      case STATE_RESET:
+          commandForUno = "RESET"; textForBlynk = ""; currentLetterContext = " "; break;
+       // No CENTER case needed
+    }
+
+    String currentSimulatedStateString = stateToString(currentSimState); // Convert enum to string for print/send
+
+    // --- Print Simulated State to Local Serial Monitor ---
     Serial.printf("Simulated State: %s\n", currentSimulatedStateString.c_str());
 
     // --- Send Command to Arduino Uno via Wired Serial (Serial2 TX = GPIO17) ---
@@ -171,30 +174,30 @@ void loop() {
     }
 
     // --- Send Resulting Text to Blynk V1 (Only on SELECT state) ---
-    if (currentSimulatedStateEnum == STATE_SELECT && textForBlynk.length() > 0) {
+    if (currentSimState == STATE_SELECT && textForBlynk.length() > 0) {
        Serial.printf("-> Sending text '%s' to Blynk V%d...\n", textForBlynk.c_str(), BLYNK_TEXT_OUTPUT_PIN);
        if(Blynk.connected()) {
           Blynk.virtualWrite(BLYNK_TEXT_OUTPUT_PIN, textForBlynk);
        } else {
           Serial.println("(Blynk disconnected)");
        }
+    } else if (currentSimState == STATE_RESET) {
+        // Clear Blynk display on reset state
+         if(Blynk.connected()) { Blynk.virtualWrite(BLYNK_TEXT_OUTPUT_PIN, " "); }
     }
-    // Consider if RESET should clear Blynk display (handled in BLYNK_WRITE(V2) now)
 
-    lastSimTime = currentTime;
+    lastSimActionTime = currentTime; // Reset timer for next simulation step
   }
   yield();
 } // End of loop()
 
 // --- Helper Function: State to String ---
-String stateToString(SimState state) {
+String stateToString(SimGazeState state) {
   switch (state) {
-    case STATE_CENTER: return "CENTER";
     case STATE_UP:     return "UP";
     case STATE_DOWN:   return "DOWN";
-    case STATE_SELECT: return "SELECT"; // Changed from BLINK
-    case STATE_RESET:  return "RESET";  // Added RESET state
-    // case STATE_LOST: return "LOST"; // Removed if not needed in simulation
-    default:           return "INIT";
+    case STATE_SELECT: return "SELECT";
+    case STATE_RESET:  return "RESET";
+    default:           return "INIT"; // Or "UNKNOWN"
   }
 }
