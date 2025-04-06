@@ -1,105 +1,351 @@
-//********************************************************************
-// Arduino Uno Code for Vision Controlled Spelling Board (GitHub Repo - Plan A Concept)
-// Target: Arduino Uno - FINAL GITHUB VERSION - NO L/R/CENTER
-// Function: Listens for commands ("UP", "DOWN", "SELECT", "RESET", "MODE_ON", "MODE_OFF")
-//           from ESP32 via Serial port and moves a Servo motor on Pin 9 accordingly.
-//********************************************************************
+#include <Servo.h> // Include the Servo library
 
-#include <Servo.h>
+// Define modes and commands (same as before)
+String str1 = "UP";
+String str2 = "DOWN";
+String str3 = "BLINK"; // Confirmation command
+String mode1 = "LETTER MODE";
+String mode2 = "NUMBER MODE";
+String mode3 = "KEYWORD MODE";
+String rst = "RESET"; // Assuming RESET command might be needed
 
-// --- Pin Definitions ---
-const int servoPin = 9; // Servo signal connected here
+// Define colors (same as before)
+String c1 = "YELLOW";
+String c2 = "BLUE";
+String c3 = "RED";
+String c4 = "BLACK";
+String c5 = "PINK";
+String c6 = "GREEN";
 
-// --- Servo Object & Variables ---
-Servo myServo;
-int currentAngle = 0; // Start at 0 (RESET position)
-const int stepDegrees = 60; // Degrees to move for UP/DOWN (TUNE THIS)
-const int maxAngle = 180;
-const int minAngle = 0;
+// --- Servo Setup ---
+#define SERVO_PIN 9 // Use a PWM pin for the Servo (e.g., pin 9 on Uno)
+Servo myServo;      // Create a servo object
 
-// --- Serial Communication ---
-const long ESP32_BAUD_RATE = 9600; // Must match ESP32's SerialUno speed
+// --- Servo Angle Definitions ---
+// !!! YOU MUST ADJUST THESE ANGLES (0-180) TO MATCH YOUR PHYSICAL BOARD LAYOUT !!!
+const int servoAngles1[] = { 10,  40,  70, 100, 130, 160}; // 6 angles for colour/letter selection
+const int POS1_COUNT = sizeof(servoAngles1) / sizeof(servoAngles1[0]);
 
-// --- State ---
-bool systemActive = false; // Track if ESP32 has activated the mode
+const int servoAngles2[] = { 30, 150}; // 2 angles for number selection
+const int POS2_COUNT = sizeof(servoAngles2) / sizeof(servoAngles2[0]);
+
+const int servoAngles3[] = { 60, 120}; // 2 angles for keyword selection ("YES", "NO")
+const int POS3_COUNT = sizeof(servoAngles3) / sizeof(servoAngles3[0]);
+
+// --- State Variables (mostly same as before) ---
+enum Mode { NONE, LETTER, NUMBER, KEYWORD };
+Mode currentMode = NONE;
+enum SelectionState { IDLE, SELECTING_COLOR, SELECTING_ITEM };
+SelectionState currentState = IDLE;
+
+int currentPositionIndex1 = 0; // Index for servoAngles1 array
+int currentPositionIndex2 = 0; // Index for servoAngles2 array
+int currentPositionIndex3 = 0; // Index for servoAngles3 array
+String selectedColour = "";
+char selectedLetter = ' ';
+int selectedNumber = -1;
+String selectedKeyword = "";
+char finalSelectionChar = ' ';
+int finalSelectionInt = -1;
+String finalSelectionStr = "";
+
+String inputStr; // Global variable to hold input string within loop iteration
 
 //====================================================================
-// SETUP
+// SETUP FUNCTION
 //====================================================================
 void setup() {
-  Serial.begin(ESP32_BAUD_RATE); // Start Serial for ESP32 communication
-  Serial.println("Uno Servo Controller Ready (Plan A - No L/R/Center). Waiting for MODE_ON...");
-
-  myServo.attach(servoPin);
-  myServo.write(currentAngle); // Start servo at initial 0 position
-  Serial.print("Servo initialized at: "); Serial.println(currentAngle);
-} // End of setup()
+  Serial.begin(9600); // Start Serial communication (ensure ESP32 uses same baud rate for Serial2)
+  myServo.attach(SERVO_PIN); // Attach the servo object to the defined pin
+  myServo.write(90);         // Move servo to center position initially (optional)
+  delay(500);                // Wait for servo to settle
+  Serial.println("Servo Control Ready. Send commands.");
+  // No stepper speed/accel needed
+}
 
 //====================================================================
 // MAIN LOOP
 //====================================================================
 void loop() {
-  // Check for commands from ESP32
   if (Serial.available() > 0) {
-    String command = Serial.readStringUntil('\n');
-    command.trim();
+    inputStr = Serial.readStringUntil('\n'); // Read command from Serial
+    inputStr.trim();                         // Remove whitespace
 
-    Serial.print("Received Command: "); // Echo for debugging Uno side
-    Serial.println(command);
+    Serial.print("Received: "); // Echo command for debugging
+    Serial.println(inputStr);
 
-    // Update active state first
-    if (command == "MODE_ON") {
-      systemActive = true;
-      Serial.println("System Activated by ESP32.");
-      // Ensure servo is at reset position when activated
-      currentAngle = 0;
-      myServo.write(currentAngle);
-      return; // Don't process MODE_ON as a movement
-    } else if (command == "MODE_OFF") {
-      systemActive = false;
-      Serial.println("System Deactivated by ESP32.");
-      // Optional: Move servo to resting position?
-      // currentAngle = 0;
-      // myServo.write(currentAngle);
-      return; // Don't process MODE_OFF as a movement
+    // --- Mode Handling ---
+    if (inputStr.equalsIgnoreCase(mode1)) {
+      currentMode = LETTER;
+      currentState = SELECTING_COLOR;
+      resetToHomePosition(); // Reset index and move servo to first position
+      Serial.println("Mode changed to LETTER. Select Color.");
+      myServo.write(servoAngles1[currentPositionIndex1]); // Go to first color position
+      delay(300); // Allow servo to move
+    } else if (inputStr.equalsIgnoreCase(mode2)) {
+      currentMode = NUMBER;
+      currentState = SELECTING_COLOR;
+      resetToHomePosition();
+      Serial.println("Mode changed to NUMBER. Select Color.");
+      myServo.write(servoAngles1[currentPositionIndex1]); // Go to first color position
+      delay(300);
+    } else if (inputStr.equalsIgnoreCase(mode3)) {
+      currentMode = KEYWORD;
+      currentState = SELECTING_ITEM; // Direct selection for keyword
+      resetToHomePosition();
+      Serial.println("Mode changed to KEYWORD. Select YES/NO.");
+      myServo.write(servoAngles3[currentPositionIndex3]); // Go to first keyword position
+      delay(300);
+    } else if (inputStr.equalsIgnoreCase(rst)) { // Handle RESET command
+       resetToHomePosition();
+       currentMode = NONE; // Go back to no mode
+       currentState = IDLE;
+       Serial.println("State Reset. Select a Mode.");
     }
-
-    // Only process movement commands if system is active
-    if (!systemActive) {
-      return;
-    }
-
-    int targetAngle = currentAngle; // Default to current angle
-
-    // Determine target angle based on command (No LEFT/RIGHT/CENTER)
-    if (command == "UP") {
-      targetAngle = currentAngle + stepDegrees;
-    } else if (command == "DOWN") {
-      targetAngle = currentAngle - stepDegrees;
-    } else if (command == "RESET") {
-      targetAngle = 0; // Move to absolute zero
-    } else if (command == "SELECT") {
-      // Wiggle servo slightly for feedback on SELECT
-      myServo.write(constrain(currentAngle - 5, minAngle, maxAngle));
-      delay(100);
-      myServo.write(constrain(currentAngle + 5, minAngle, maxAngle));
-      delay(100);
-      targetAngle = currentAngle; // Return to current position after wiggle
-      Serial.println("SELECT command processed (wiggled).");
+    // --- Action Handling ---
+    else if (currentMode != NONE) {
+      if (inputStr.equalsIgnoreCase(str1)) { // UP
+        handleUp();
+      } else if (inputStr.equalsIgnoreCase(str2)) { // DOWN
+        handleDown();
+      } else if (inputStr.equalsIgnoreCase(str3)) { // BLINK (Select)
+        handleBlink();
+      }
     } else {
-      // Unknown movement command
-      Serial.print("Unknown movement command: "); Serial.println(command);
-      targetAngle = currentAngle; // Stay put
-    }
-
-    // Clamp target angle to limits (0-180 for typical servos)
-    targetAngle = constrain(targetAngle, minAngle, maxAngle);
-
-    // Move servo only if target angle is different
-    if (targetAngle != currentAngle) {
-      Serial.print("Moving servo to: "); Serial.println(targetAngle);
-      myServo.write(targetAngle);
-      currentAngle = targetAngle; // Update current angle
+      Serial.println("No mode selected. Send LETTER MODE, NUMBER MODE, or KEYWORD MODE first.");
     }
   }
-} // End of loop()
+  // No blocking actions needed in loop for servo library usually
+}
+
+//====================================================================
+// Command Handler Functions (Modified for Servo)
+//====================================================================
+
+void handleUp() {
+  switch (currentMode) {
+    case LETTER:
+    case NUMBER:
+      if (currentState == SELECTING_COLOR) {
+        currentPositionIndex1++;
+        if (currentPositionIndex1 >= POS1_COUNT) currentPositionIndex1 = 0; // Wrap
+        myServo.write(servoAngles1[currentPositionIndex1]);
+        delay(150); // Short delay for servo movement
+      } else if (currentState == SELECTING_ITEM) {
+        if (currentMode == LETTER) {
+          currentPositionIndex1++;
+          if (currentPositionIndex1 >= POS1_COUNT) currentPositionIndex1 = 0; // Wrap
+          myServo.write(servoAngles1[currentPositionIndex1]);
+          delay(150);
+        } else { // NUMBER
+          currentPositionIndex2++;
+          if (currentPositionIndex2 >= POS2_COUNT) currentPositionIndex2 = 0; // Wrap
+          myServo.write(servoAngles2[currentPositionIndex2]);
+          delay(150);
+        }
+      }
+      break;
+    case KEYWORD:
+      currentPositionIndex3++;
+      if (currentPositionIndex3 >= POS3_COUNT) currentPositionIndex3 = 0; // Wrap
+      myServo.write(servoAngles3[currentPositionIndex3]);
+      delay(150);
+      break;
+    case NONE: break;
+  }
+    Serial.print("Current Index (1/2/3): "); Serial.print(currentPositionIndex1); Serial.print("/"); Serial.print(currentPositionIndex2); Serial.print("/"); Serial.println(currentPositionIndex3); // Debug
+}
+
+void handleDown() {
+ switch (currentMode) {
+    case LETTER:
+    case NUMBER:
+      if (currentState == SELECTING_COLOR) {
+        currentPositionIndex1--;
+        if (currentPositionIndex1 < 0) currentPositionIndex1 = POS1_COUNT - 1; // Wrap
+        myServo.write(servoAngles1[currentPositionIndex1]);
+        delay(150);
+      } else if (currentState == SELECTING_ITEM) {
+        if (currentMode == LETTER) {
+          currentPositionIndex1--;
+          if (currentPositionIndex1 < 0) currentPositionIndex1 = POS1_COUNT - 1; // Wrap
+          myServo.write(servoAngles1[currentPositionIndex1]);
+          delay(150);
+        } else { // NUMBER
+          currentPositionIndex2--;
+          if (currentPositionIndex2 < 0) currentPositionIndex2 = POS2_COUNT - 1; // Wrap
+          myServo.write(servoAngles2[currentPositionIndex2]);
+          delay(150);
+        }
+      }
+      break;
+    case KEYWORD:
+      currentPositionIndex3--;
+      if (currentPositionIndex3 < 0) currentPositionIndex3 = POS3_COUNT - 1; // Wrap
+      myServo.write(servoAngles3[currentPositionIndex3]);
+      delay(150);
+      break;
+    case NONE: break;
+  }
+   Serial.print("Current Index (1/2/3): "); Serial.print(currentPositionIndex1); Serial.print("/"); Serial.print(currentPositionIndex2); Serial.print("/"); Serial.println(currentPositionIndex3); // Debug
+}
+
+void handleBlink() { // Selection Confirmation
+  switch (currentMode) {
+    case LETTER:
+    case NUMBER:
+      if (currentState == SELECTING_COLOR) {
+        // Color selected based on currentPositionIndex1
+        if (currentPositionIndex1 == 0) selectedColour = c1;
+        else if (currentPositionIndex1 == 1) selectedColour = c2;
+        else if (currentPositionIndex1 == 2) selectedColour = c3;
+        else if (currentPositionIndex1 == 3) selectedColour = c4;
+        else if (currentPositionIndex1 == 4) selectedColour = c5;
+        else if (currentPositionIndex1 == 5) selectedColour = c6;
+        else selectedColour = "";
+
+        Serial.print("Color Selected: "); Serial.println(selectedColour);
+
+        // Now ready for item selection, reset relevant index and move servo to start
+        currentState = SELECTING_ITEM;
+        if (currentMode == LETTER) {
+             currentPositionIndex1 = 0; // Reset index for letter selection
+             myServo.write(servoAngles1[currentPositionIndex1]); // Go to first letter position
+             delay(300);
+             Serial.println("Select Letter.");
+        } else { // NUMBER
+             currentPositionIndex2 = 0; // Reset index for number selection
+             myServo.write(servoAngles2[currentPositionIndex2]); // Go to first number position
+             delay(300);
+              Serial.println("Select Number.");
+        }
+
+      } else if (currentState == SELECTING_ITEM) {
+        // Final item selected based on color and current item index
+        determineFinalSelection();
+        printFinalSelection();
+        // Return to idle state within this mode, ready for next color selection
+        currentState = SELECTING_COLOR;
+        currentPositionIndex1 = 0; // Reset color index
+        myServo.write(servoAngles1[currentPositionIndex1]); // Go back to first color position
+        delay(300);
+        Serial.println("Selection complete. Select Color for next item or change mode.");
+      }
+      break;
+
+    case KEYWORD:
+       // Keyword selected based on currentPositionIndex3
+       determineFinalSelection(); // Sets selectedKeyword
+       printFinalSelection();
+       // Stay in keyword mode, maybe reset index? Or require mode change command?
+       // Let's reset index for simplicity
+       currentPositionIndex3 = 0;
+       myServo.write(servoAngles3[currentPositionIndex3]);
+       delay(300);
+       Serial.println("Selection complete. Select YES/NO again or change mode.");
+      break;
+
+    case NONE:
+       Serial.println("Cannot select, no mode active.");
+      break;
+  }
+}
+
+// Determine final selection based on state variables
+void determineFinalSelection() {
+  // Reset selections
+  selectedLetter = ' ';
+  selectedNumber = -1;
+  selectedKeyword = "";
+  finalSelectionChar = ' ';
+  finalSelectionInt = -1;
+  finalSelectionStr = "";
+
+  if (currentMode == LETTER) {
+      // ... (LETTER Selection Logic identical to previous code) ...
+      if (selectedColour == c1) { // YELLOW
+        if (currentPositionIndex1 == 1) selectedLetter = 'H'; else if (currentPositionIndex1 == 2) selectedLetter = 'T'; else if (currentPositionIndex1 == 4) selectedLetter = 'N'; else if (currentPositionIndex1 == 5) selectedLetter = 'B';
+      } else if (selectedColour == c2) { // BLUE
+        if (currentPositionIndex1 == 1) selectedLetter = 'I'; else if (currentPositionIndex1 == 2) selectedLetter = 'U'; else if (currentPositionIndex1 == 4) selectedLetter = 'O'; else if (currentPositionIndex1 == 5) selectedLetter = 'C';
+      } else if (selectedColour == c3) { // RED
+          if (currentPositionIndex1 == 1) selectedLetter = 'L'; else if (currentPositionIndex1 == 2) selectedLetter = 'X'; else if (currentPositionIndex1 == 3) selectedLetter = 'Z'; else if (currentPositionIndex1 == 4) selectedLetter = 'R'; else if (currentPositionIndex1 == 5) selectedLetter = 'F';
+      } else if (selectedColour == c4) { // BLACK
+          if (currentPositionIndex1 == 1) selectedLetter = 'K'; else if (currentPositionIndex1 == 2) selectedLetter = 'W'; else if (currentPositionIndex1 == 3) selectedLetter = 'Y'; else if (currentPositionIndex1 == 4) selectedLetter = 'Q'; else if (currentPositionIndex1 == 5) selectedLetter = 'E';
+      } else if (selectedColour == c5) { // PINK
+          if (currentPositionIndex1 == 1) selectedLetter = 'J'; else if (currentPositionIndex1 == 2) selectedLetter = 'V'; else if (currentPositionIndex1 == 4) selectedLetter = 'P'; else if (currentPositionIndex1 == 5) selectedLetter = 'D';
+      } else if (selectedColour == c6) { // GREEN
+          if (currentPositionIndex1 == 1) selectedLetter = 'G'; else if (currentPositionIndex1 == 2) selectedLetter = 'S'; else if (currentPositionIndex1 == 4) selectedLetter = 'M'; else if (currentPositionIndex1 == 5) selectedLetter = 'A';
+      }
+      finalSelectionChar = selectedLetter;
+
+  } else if (currentMode == NUMBER) {
+      // ... (NUMBER Selection Logic identical to previous code) ...
+       if (selectedColour == c1) { // YELLOW
+          if (currentPositionIndex2 == 0) selectedNumber = 2; else if (currentPositionIndex2 == 1) selectedNumber = 8;
+      } else if (selectedColour == c2) { // BLUE
+          if (currentPositionIndex2 == 0) selectedNumber = 3; else if (currentPositionIndex2 == 1) selectedNumber = 9;
+      } else if (selectedColour == c3) { // RED
+          if (currentPositionIndex2 == 0) selectedNumber = 6;
+      } else if (selectedColour == c4) { // BLACK
+          if (currentPositionIndex2 == 0) selectedNumber = 5;
+      } else if (selectedColour == c5) { // PINK
+          if (currentPositionIndex2 == 0) selectedNumber = 4; else if (currentPositionIndex2 == 1) selectedNumber = 0;
+      } else if (selectedColour == c6) { // GREEN
+          if (currentPositionIndex2 == 0) selectedNumber = 1; else if (currentPositionIndex2 == 1) selectedNumber = 7;
+      }
+       finalSelectionInt = selectedNumber;
+
+  } else if (currentMode == KEYWORD) {
+       if (currentPositionIndex3 == 0) selectedKeyword = "YES";
+       else if (currentPositionIndex3 == 1) selectedKeyword = "NO";
+       else selectedKeyword = "";
+       finalSelectionStr = selectedKeyword;
+  }
+}
+
+// Print final selection to Serial Monitor
+void printFinalSelection() {
+  Serial.print("Final Selection: ");
+  if (finalSelectionChar != ' ') {
+    Serial.println(finalSelectionChar);
+    // If ESP32 needs the final char, send it back here via Serial TX
+    // Serial.print("FINAL:"); Serial.println(finalSelectionChar);
+  } else if (finalSelectionInt != -1) {
+    Serial.println(finalSelectionInt);
+    // Serial.print("FINAL:"); Serial.println(finalSelectionInt);
+  } else if (finalSelectionStr != "") {
+     Serial.println(finalSelectionStr);
+     // Serial.print("FINAL:"); Serial.println(finalSelectionStr);
+  } else {
+    Serial.println("[Nothing Selected]");
+  }
+}
+
+// --- Utility Functions ---
+
+// Reset indices and move servo to first position of current mode
+void resetToHomePosition() {
+  currentPositionIndex1 = 0;
+  currentPositionIndex2 = 0;
+  currentPositionIndex3 = 0;
+  selectedColour = "";
+  selectedLetter = ' ';
+  selectedNumber = -1;
+  selectedKeyword = "";
+  finalSelectionChar = ' ';
+  finalSelectionInt = -1;
+  finalSelectionStr = "";
+
+  // Move servo to initial position based on mode
+  if (currentMode == LETTER || currentMode == NUMBER) {
+      currentState = SELECTING_COLOR;
+      // We don't move servo here, assume mode change command handles initial move
+  } else if (currentMode == KEYWORD) {
+      currentState = SELECTING_ITEM;
+      // We don't move servo here, assume mode change command handles initial move
+  } else {
+      currentState = IDLE;
+      myServo.write(servoAngles1[0]); // Go to absolute 0 angle if no mode? Or center (90)?
+      delay(300);
+  }
+}
